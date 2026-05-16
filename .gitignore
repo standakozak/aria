@@ -1,0 +1,9 @@
+*.jpg
+*/*sparse*
+database.db
+images
+outputs
+inputs
+*.pyc
+.vscode
+__pycache__
