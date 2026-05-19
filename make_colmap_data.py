@@ -168,11 +168,15 @@ def load_closed_loop_trajectory(path):
 
 
 def get_camera_pose(trajectory, camera_calib, timestamp_ns):
+    """
+    Returns:
+        T_camera_world (sophus.SE3): world -> camera SE3 transformation at the specified timestamp
+    """
     pose_info = get_nearest_pose(trajectory, timestamp_ns)
     T_world_device = pose_info.transform_world_device
     T_device_camera = camera_calib.get_transform_device_camera()
     T_world_camera = T_world_device @ T_device_camera
-    return T_world_camera
+    return T_world_camera.inverse()
 
 
 def pose_to_str(camera_pose):
@@ -352,9 +356,9 @@ if __name__ == "__main__":
     semidense_points = "inputs/mps_94439916-b1ab-404b-9b30-716d0a0978a6_vrs/slam/semidense_points.csv.gz"
     semidense_observations = "inputs/mps_94439916-b1ab-404b-9b30-716d0a0978a6_vrs/slam/semidense_observations.csv.gz"
 
-    output_dir = "outputs/ground_floor_aria_temp"
+    output_dir = "outputs/ground_floor_aria"
 
-    sparse_dir = output_dir + "/sparse"
+    sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
 
     #### CAMERA
