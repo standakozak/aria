@@ -154,7 +154,7 @@ def undistort_images(provider, output_dir_parent, camera_dict):
             undistorted_img = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2GRAY)
 
         img_id = f"{camera_dict['id']}00{img_timestamp}"
-        filename = f"{camera_dict['label']}_{img_timestamp}.jpg"
+        filename = f"{camera_dict['camera_label']}_{img_timestamp}.jpg"
         output_path = f"{output_dir}/{filename}"
         cv2.imwrite(output_path, undistorted_img)
 
