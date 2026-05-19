@@ -83,14 +83,17 @@ def undistort_image(img_numpy, camera_dict, rotate_90=True):
     return undistorted
 
 
-def default_camera_stream(provider, camera_dict, downsample_rate=10):
+def default_camera_stream(provider, camera_dict):
     deliver_option = provider.get_default_deliver_queued_options()
     deliver_option.deactivate_stream_all()
     deliver_option.activate_stream(camera_dict["stream_id"])
-    deliver_option.set_subsample_rate(camera_dict["stream_id"], downsample_rate)
+    deliver_option.set_subsample_rate(
+        camera_dict["stream_id"], camera_dict["downsample_rate"]
+    )
     yield from provider.deliver_queued_sensor_data(deliver_option)
 
-def load_images(provider, output_dir_parent, camera_dict, downsample_rate=10):
+
+def load_images(provider, output_dir_parent, camera_dict):
     output_dir = output_dir_parent + "/images"
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
@@ -102,7 +105,7 @@ def load_images(provider, output_dir_parent, camera_dict, downsample_rate=10):
 
     imgs = []
     imgs_numpy = []
-    for data in default_camera_stream(provider, camera_dict, downsample_rate):
+    for data in default_camera_stream(provider, camera_dict):
         img_timestamp = data.get_time_ns(TimeDomain.DEVICE_TIME)
         print("Timestamp: ", img_timestamp)
         image_data = data.image_data_and_record()
@@ -110,12 +113,12 @@ def load_images(provider, output_dir_parent, camera_dict, downsample_rate=10):
         img = image_data[0].to_numpy_array()
         imgs_numpy.append(img)
 
-        filename = f"{img_timestamp}.jpg"
+        filename = f"{img_timestamp}_{camera_dict['camera_label']}.jpg"
         output_path = f"{output_dir}/{filename}"
 
         imgs.append(
             {
-                "id": img_timestamp,
+                "id": f"{img_timestamp}_{camera_dict['camera_label']}",
                 "timestamp": img_timestamp,
                 "path": output_path,
                 "file": filename,
@@ -126,7 +129,7 @@ def load_images(provider, output_dir_parent, camera_dict, downsample_rate=10):
     return imgs, imgs_numpy
 
 
-def undistort_images(provider, output_dir_parent, camera_dict, downsample_rate=10):
+def undistort_images(provider, output_dir_parent, camera_dict):
     output_dir = output_dir_parent + "/images"
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
@@ -137,22 +140,27 @@ def undistort_images(provider, output_dir_parent, camera_dict, downsample_rate=1
             )
 
     imgs = []
-    for data in default_camera_stream(provider, camera_dict, downsample_rate):
+    for data in default_camera_stream(provider, camera_dict):
         img_timestamp = data.get_time_ns(TimeDomain.DEVICE_TIME)
         print("Timestamp: ", img_timestamp)
         image_data = data.image_data_and_record()
 
         # .copy() can be necessary, because undistortion uses the raw bytes
         img = image_data[0].to_numpy_array()
-        undistorted_img = undistort_image(img, camera_dict)
+        undistorted_img = cv2.cvtColor(
+            undistort_image(img, camera_dict), cv2.COLOR_RGB2BGR
+        )
+        if camera_dict["convert_grayscale"]:
+            undistorted_img = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2GRAY)
 
-        filename = f"{img_timestamp}.jpg"
+        img_id = f"{camera_dict['camera_label']}_{img_timestamp}"
+        filename = f"{img_id}.jpg"
         output_path = f"{output_dir}/{filename}"
-        cv2.imwrite(output_path, cv2.cvtColor(undistorted_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(output_path, undistorted_img)
 
         imgs.append(
             {
-                "id": img_timestamp,
+                "id": img_id,
                 "timestamp": img_timestamp,
                 "path": output_path,
                 "file": filename,
@@ -172,7 +180,10 @@ def get_camera_pose(trajectory, camera_calib, timestamp_ns):
     Returns:
         T_camera_world (sophus.SE3): world -> camera SE3 transformation at the specified timestamp
     """
+
     pose_info = get_nearest_pose(trajectory, timestamp_ns)
+    if pose_info is None:
+        return None
     T_world_device = pose_info.transform_world_device
     T_device_camera = camera_calib.get_transform_device_camera()
     T_world_camera = T_world_device @ T_device_camera
@@ -184,28 +195,45 @@ def pose_to_str(camera_pose):
     return " ".join([str(x) for x in quat_trans])
 
 
-def get_images_pose(img_infos, camera, closed_trajectory_file):
+def get_images_pose(img_infos, camera, closed_trajectory_file, delete_wout_poses=True):
     trajectory = load_closed_loop_trajectory(closed_trajectory_file)
+    imgs_with_poses = []
     for img_dict in img_infos:
         camera_pose = get_camera_pose(
             trajectory, camera["undistorted_params"], img_dict["timestamp"]
         )
+        if camera_pose is None:
+            if delete_wout_poses:
+                os.remove(img_dict["path"])
+            continue
+
         pose_str = pose_to_str(camera_pose)
         img_dict["quat_trans"] = pose_str
         img_dict["pose"] = camera_pose
-    return img_infos
+        imgs_with_poses.append(img_dict)
+    return imgs_with_poses
 
 
-def get_camera_infos(provider, camera_label, camera_id):
+def get_camera_infos(
+    provider,
+    camera_label,
+    camera_id,
+    downsample_rate=1,
+    convert_grayscale=False,
+    crop_pixels=0,
+):
     stream_id = provider.get_stream_id_from_label(camera_label)
     camera_info = {
         "id": camera_id,
         "stream_id": stream_id,
         "camera_label": camera_label,
+        "downsample_rate": downsample_rate,
+        "convert_grayscale": convert_grayscale,
+        "crop_pixels": crop_pixels,
     }
     orig_params = get_camera_params(provider, camera_label)
     camera_info["distorted_params"] = orig_params
-    camera_info["undistorted_params"] = get_undistorted_params(orig_params)
+    camera_info["undistorted_params"] = get_undistorted_params(orig_params, crop_pixels)
     return camera_info
 
 
@@ -336,8 +364,11 @@ def points_to_str(points):
     return points_str
 
 
-def save_data(path, camera_dict, image_list, points_list):
-    camera_str = pinhole_params_to_str(camera_dict)
+def save_data(path, camera_dicts, image_list, points_list):
+    camera_strings = [
+        pinhole_params_to_str(camera_dict) for camera_dict in camera_dicts
+    ]
+    camera_str = "\n".join(camera_strings)
     images_str = "\n".join(images_to_str(image_list))
     points_str = "\n".join(points_to_str(points_list))
 
@@ -351,47 +382,79 @@ def save_data(path, camera_dict, image_list, points_list):
 
 
 if __name__ == "__main__":
-    vrsfile = "inputs/cbf9321c-2f37-43f5-80d8-7a4037b74030.vrs"
-    closed_trajectory = "inputs/mps_cbf9321c-2f37-43f5-80d8-7a4037b74030_vrs/slam/closed_loop_trajectory.csv"
-    semidense_points = "inputs/mps_cbf9321c-2f37-43f5-80d8-7a4037b74030_vrs/slam/semidense_points.csv.gz"
-    semidense_observations = "inputs/mps_cbf9321c-2f37-43f5-80d8-7a4037b74030_vrs/slam/semidense_observations.csv.gz"
+    filename = "94439916-b1ab-404b-9b30-716d0a0978a6"
+    vrsfile = f"inputs/{filename}.vrs"
+    closed_trajectory = f"inputs/mps_{filename}_vrs/slam/closed_loop_trajectory.csv"
+    semidense_points = f"inputs/mps_{filename}_vrs/slam/semidense_points.csv.gz"
+    semidense_observations = (
+        f"inputs/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
+    )
 
-    output_dir = "outputs/first_floor_aria"
+    output_dir = "outputs/ground_floor_aria_grayscale"
 
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
 
     #### CAMERA
     provider = load_vrs(vrsfile)
-    
-    camera_rgb = get_camera_infos(provider, "camera-rgb", 1)
-    print("Distorted camera parameters:", camera_rgb["distorted_params"], end="\n\n")
-    print(
-        "Undistorted camera parameters:", camera_rgb["undistorted_params"], end="\n\n"
+
+    # camera_rgb = get_camera_infos(
+    #    provider,
+    #    "camera-rgb",
+    #    1,
+    #    downsample_rate=1,
+    #    convert_grayscale=True,
+    #    crop_pixels=15
+    # )
+    camera_left_slam = get_camera_infos(
+        provider, "camera-slam-left", 2, downsample_rate=100, crop_pixels=0
     )
-    print(pinhole_params_to_str(camera_rgb))
+    camera_right_slam = get_camera_infos(
+        provider, "camera-slam-right", 3, downsample_rate=100, crop_pixels=0
+    )
+    cameras = [camera_left_slam, camera_right_slam]
+    test_camera = camera_left_slam
+
+    print(
+        f"Distorted camera parameters ({test_camera['camera_label']}):",
+        test_camera["distorted_params"],
+        end="\n\n",
+    )
+    print(
+        "Undistorted camera parameters:", test_camera["undistorted_params"], end="\n\n"
+    )
+    print(pinhole_params_to_str(test_camera))
 
     ### IMAGES
-    images = undistort_images(
-        provider,
-        output_dir,
-        camera_dict=camera_rgb,
-        downsample_rate=1,
-    )
+    images = []
+    for camera in cameras:
+        camera_images = undistort_images(
+            provider,
+            output_dir,
+            camera_dict=camera,
+        )
+        camera_images = get_images_pose(
+            camera_images, camera, closed_trajectory, delete_wout_poses=True
+        )
+        images += camera_images
 
-    images = get_images_pose(images, camera_rgb, closed_trajectory)
     print(*images_to_str(images)[:5], sep="\n")
 
     ## Get a single image:
-    frame = provider.get_image_data_by_index(camera_rgb["stream_id"], 0)
+    frame = provider.get_image_data_by_index(test_camera["stream_id"], 0)
     img = frame[0].to_numpy_array()
 
-    undistorted_img = undistort_image(img, camera_rgb)
+    undistorted_img = undistort_image(img, test_camera)
+    print(
+        "First and last pixel of undistorted image:",
+        undistorted_img[0, 0],
+        undistorted_img[-1, -1],
+    )
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(1, 2, figsize=(10, 5))
     ax[0].imshow(img)
-    ax[0].set_title("Original Image")
+    ax[0].set_title(f"Original Image {test_camera['camera_label']}")
     ax[1].imshow(undistorted_img)
     ax[1].set_title("Undistorted Image")
     plt.savefig("outputs/undistortion_example.jpg")
@@ -403,13 +466,13 @@ if __name__ == "__main__":
         inverse_distance_std_threshold=0.001,
         distance_std_threshold=0.05,
     )
-    #observations = load_observations(semidense_observations, points=point_positions)
-    #print("Observations loaded!")
+    # observations = load_observations(semidense_observations, points=point_positions)
+    # print("Observations loaded!")
 
-    #images = add_image_observations(provider, images, observations)
+    # images = add_image_observations(provider, images, observations)
 
     ### OUTPUT
-    save_data(sparse_dir, camera_rgb, images, point_positions)
+    save_data(sparse_dir, cameras, images, point_positions)
 
 """
 TODO:
