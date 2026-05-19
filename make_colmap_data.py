@@ -351,12 +351,12 @@ def save_data(path, camera_dict, image_list, points_list):
 
 
 if __name__ == "__main__":
-    vrsfile = "inputs/94439916-b1ab-404b-9b30-716d0a0978a6.vrs"
-    closed_trajectory = "inputs/mps_94439916-b1ab-404b-9b30-716d0a0978a6_vrs/slam/closed_loop_trajectory.csv"
-    semidense_points = "inputs/mps_94439916-b1ab-404b-9b30-716d0a0978a6_vrs/slam/semidense_points.csv.gz"
-    semidense_observations = "inputs/mps_94439916-b1ab-404b-9b30-716d0a0978a6_vrs/slam/semidense_observations.csv.gz"
+    vrsfile = "inputs/cbf9321c-2f37-43f5-80d8-7a4037b74030.vrs"
+    closed_trajectory = "inputs/mps_cbf9321c-2f37-43f5-80d8-7a4037b74030_vrs/slam/closed_loop_trajectory.csv"
+    semidense_points = "inputs/mps_cbf9321c-2f37-43f5-80d8-7a4037b74030_vrs/slam/semidense_points.csv.gz"
+    semidense_observations = "inputs/mps_cbf9321c-2f37-43f5-80d8-7a4037b74030_vrs/slam/semidense_observations.csv.gz"
 
-    output_dir = "outputs/ground_floor_aria"
+    output_dir = "outputs/first_floor_aria"
 
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
@@ -474,7 +474,7 @@ TODO:
         TextureMesh scene_dense.mvs -m scene_dense_mesh.ply -o scene_dense_mesh_texture.mvs
 
     From refined mesh:
-        TextureMesh scene_dense.mvs -m scene_dense_mesh_refine.ply -o scene_dense_mesh_refine_texture.mvs
+        TextureMesh scene_dense.mvs -m scene_dense_mesh_refine.ply -o scene_dense_mesh_refine_texture.mvs --global-seam-leveling 0 --local-seam-leveling 0
 
         
 
