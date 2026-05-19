@@ -233,7 +233,9 @@ def get_camera_infos(
     }
     orig_params = get_camera_params(provider, camera_label)
     camera_info["distorted_params"] = orig_params
-    camera_info["undistorted_params"] = get_undistorted_params(orig_params, crop_pixels)
+    camera_info["undistorted_params"] = get_undistorted_params(
+        orig_params, rotate_90=True, crop_pixels=crop_pixels
+    )
     return camera_info
 
 
@@ -398,21 +400,21 @@ if __name__ == "__main__":
     #### CAMERA
     provider = load_vrs(vrsfile)
 
-    # camera_rgb = get_camera_infos(
-    #    provider,
-    #    "camera-rgb",
-    #    1,
-    #    downsample_rate=1,
-    #    convert_grayscale=True,
-    #    crop_pixels=15
-    # )
+    camera_rgb = get_camera_infos(
+        provider,
+        "camera-rgb",
+        1,
+        downsample_rate=1,
+        convert_grayscale=True,
+        crop_pixels=150,
+    )
     camera_left_slam = get_camera_infos(
-        provider, "camera-slam-left", 2, downsample_rate=100, crop_pixels=0
+        provider, "camera-slam-left", 2, downsample_rate=5, crop_pixels=0
     )
     camera_right_slam = get_camera_infos(
-        provider, "camera-slam-right", 3, downsample_rate=100, crop_pixels=0
+        provider, "camera-slam-right", 3, downsample_rate=5, crop_pixels=0
     )
-    cameras = [camera_left_slam, camera_right_slam]
+    cameras = [camera_left_slam, camera_rgb, camera_right_slam]
     test_camera = camera_left_slam
 
     print(
