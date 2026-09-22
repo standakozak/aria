@@ -1,110 +1,22 @@
 import os
+import random
 from random import sample
 
 import cv2
-import numpy as np
 from make_colmap_data import (
-    default_camera_stream,
-    get_camera_params,
+    get_camera_infos,
     get_nearest_pose,
-    get_undistorted_params,
     load_closed_loop_trajectory,
     load_point_cloud,
     load_vrs,
     pinhole_params_to_str,
     pose_to_str,
+    undistort_images,
 )
-from projectaria_tools.core.sensor_data import TimeDomain
 
-from projectaria_tools.core import calibration, mps
-from projectaria_tools.core.calibration import distort_by_calibration
+from projectaria_tools.core import mps
 
-
-def get_camera_infos(
-    provider,
-    camera_label,
-    camera_id,
-    downsample_rate=1,
-    convert_grayscale=False,
-    crop_pixels=0,
-    img_out_size=None,
-):
-    stream_id = provider.get_stream_id_from_label(camera_label)
-    camera_info = {
-        "id": camera_id,
-        "stream_id": stream_id,
-        "camera_label": camera_label,
-        "downsample_rate": downsample_rate,
-        "convert_grayscale": convert_grayscale,
-        "crop_pixels": crop_pixels,
-    }
-    orig_params = get_camera_params(provider, camera_label)
-    camera_info["params_distorted"] = orig_params
-    camera_info["params_undistorted_unrotated"] = get_undistorted_params(
-        orig_params, rotate_90=False, crop_pixels=crop_pixels, out_size=img_out_size
-    )
-    camera_info["params_undistorted"] = calibration.rotate_camera_calib_cw90deg(
-        camera_info["params_undistorted_unrotated"]
-    )
-    return camera_info
-
-
-def undistort_image(img_numpy, camera_dict, rotate_90=True):
-    orig_calib = camera_dict["params_distorted"]
-    updated_calib = camera_dict["params_undistorted_unrotated"]
-
-    undistorted = distort_by_calibration(img_numpy, updated_calib, orig_calib)
-    if rotate_90:
-        return np.rot90(undistorted, k=3)
-    return undistorted
-
-
-def undistort_images(provider, output_dir_parent, camera_dict, limit=None):
-    output_dir = output_dir_parent + "/images"
-    if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
-    else:
-        if os.listdir(output_dir):
-            print(
-                f"WARNING: image path {output_dir} exists and is not empty. The data may be inconsistent!"
-            )
-
-    imgs = []
-    for index, data in enumerate(default_camera_stream(provider, camera_dict)):
-        if limit is not None and index >= limit:
-            break
-        img_timestamp = data.get_time_ns(TimeDomain.DEVICE_TIME)
-        print("Timestamp: ", img_timestamp)
-        image_data = data.image_data_and_record()
-
-        # .copy() can be necessary, because undistortion uses the raw bytes
-        orig_img = image_data[0].to_numpy_array()
-        undistorted_img = cv2.cvtColor(
-            undistort_image(orig_img.copy(), camera_dict), cv2.COLOR_RGB2BGR
-        )
-
-        if camera_dict["convert_grayscale"]:
-            undistorted_img = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2GRAY)
-
-        img_id = f"{camera_dict['id']}00{img_timestamp}"
-        filename = f"{camera_dict['camera_label']}_{img_timestamp}.jpg"
-        output_path = f"{output_dir}/{filename}"
-        cv2.imwrite(output_path, orig_img)
-
-        imgs.append(
-            {
-                "id": img_id,
-                "timestamp": img_timestamp,
-                "path": output_path,
-                "file": filename,
-                "camera_id": camera_dict["id"],
-                "img_distorted": orig_img,
-                "img_undistorted": undistorted_img,
-            }
-        )
-
-    return imgs
-
+random.seed(0)
 
 def load_observations(path, points=None, timestamp_min=None, timestamp_max=None):
     ## Returns a list of point observations with the attributes:
@@ -172,7 +84,7 @@ def get_metric_depth(point_world, T_camera_world):
     and not stereo disparity. Camera intrinsics are unused because depth is
     determined by the extrinsic transform.
     """
-    point_camera = T_camera_world @ point_world
+    point_camera = T_camera_world @ point_world["pos"]
     return float(point_camera[2])
 
 
@@ -268,17 +180,17 @@ def project_points_to_img(
 
 
 if __name__ == "__main__":
-    filename = "94439916-b1ab-404b-9b30-716d0a0978a6"
-    vrsfile = f"aria/inputs/{filename}.vrs"
+    filename = "ground_floor"
+    vrsfile = f"inputs/{filename}/{filename}.vrs"
     closed_trajectory = (
-        f"aria/inputs/mps_{filename}_vrs/slam/closed_loop_trajectory.csv"
+        f"inputs/{filename}/mps_{filename}_vrs/slam/closed_loop_trajectory.csv"
     )
-    semidense_points = f"aria/inputs/mps_{filename}_vrs/slam/semidense_points.csv.gz"
+    semidense_points = f"inputs/{filename}/mps_{filename}_vrs/slam/semidense_points.csv.gz"
     semidense_observations = (
-        f"aria/inputs/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
+        f"inputs/{filename}/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
     )
 
-    output_dir = "aria/outputs/ground_floor_aria_TEMP"
+    output_dir = "outputs/ground_floor_aria_TEMP_updated"
 
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
@@ -332,7 +244,7 @@ if __name__ == "__main__":
 
     ## RGB images
     rgb_images = undistort_images(
-        provider=provider, output_dir_parent=output_dir, camera_dict=camera_rgb, limit=1
+        provider=provider, output_dir_parent=output_dir, subfolder="rgb", camera_dict=camera_rgb, limit=1
     )
     rgb_img = rgb_images[0]  # NOTE: testing on a single image
     rgb_imgs = get_images_pose(
@@ -343,6 +255,7 @@ if __name__ == "__main__":
     left_images = undistort_images(
         provider=provider,
         output_dir_parent=output_dir,
+        subfolder="left",
         camera_dict=camera_left_slam,
         limit=3,
     )
@@ -361,6 +274,7 @@ if __name__ == "__main__":
     right_images = undistort_images(
         provider=provider,
         output_dir_parent=output_dir,
+        subfolder="right",
         camera_dict=camera_right_slam,
         limit=3,
     )
@@ -437,7 +351,7 @@ if __name__ == "__main__":
         left_imgs[0]["img_undistorted"],
         left_imgs[0]["pose_undistorted"],
         camera_left_slam["params_undistorted"],
-        out_filename="aria/outputs/ground_floor_aria_TEMP/left_projected_aria_und.jpg",
+        out_filename=output_dir + "/left_projected_aria_und.jpg",
         point_size=5,
     )
 
@@ -447,7 +361,7 @@ if __name__ == "__main__":
         left_imgs[0]["img_distorted"],
         left_imgs[0]["pose_distorted"],
         camera_left_slam["params_distorted"],
-        out_filename="aria/outputs/ground_floor_aria_TEMP/left_projected_aria_dist.jpg",
+        out_filename=output_dir + "/left_projected_aria_dist.jpg",
         point_size=5,
     )
 
@@ -457,7 +371,7 @@ if __name__ == "__main__":
         right_imgs[0]["img_undistorted"],
         right_imgs[0]["pose_undistorted"],
         camera_right_slam["params_undistorted"],
-        out_filename="aria/outputs/ground_floor_aria_TEMP/right_projected_aria_und.jpg",
+        out_filename=output_dir + "/right_projected_aria_und.jpg",
         point_size=5,
     )
 
@@ -467,7 +381,7 @@ if __name__ == "__main__":
         right_imgs[0]["img_distorted"],
         right_imgs[0]["pose_distorted"],
         camera_right_slam["params_distorted"],
-        out_filename="aria/outputs/ground_floor_aria_TEMP/right_projected_aria_dist.jpg",
+        out_filename=output_dir + "/right_projected_aria_dist.jpg",
         point_size=5,
     )
 
@@ -493,8 +407,8 @@ if __name__ == "__main__":
         left_img_orig_obs = plot_point(left_img_orig_obs, chosen_cam_1_obs["uv"])
         right_img_orig_obs = plot_point(right_img_orig_obs, chosen_cam_2_obs["uv"])
 
-    cv2.imwrite("aria/outputs/ground_floor_aria_TEMP/left_uv.jpg", left_img_orig_obs)
-    cv2.imwrite("aria/outputs/ground_floor_aria_TEMP/right_uv.jpg", right_img_orig_obs)
+    cv2.imwrite(output_dir + "/left_uv.jpg", left_img_orig_obs)
+    cv2.imwrite(output_dir + "/right_uv.jpg", right_img_orig_obs)
 
     # Projection onto RGB image
     print("Projecting points seen by both cameras to undistorted RGB:")
@@ -503,7 +417,7 @@ if __name__ == "__main__":
         rgb_imgs[0]["img_undistorted"],
         rgb_imgs[0]["pose_undistorted"],
         camera_rgb["params_undistorted"],
-        out_filename="aria/outputs/ground_floor_aria_TEMP/rgb_projected_aria_und.jpg",
+        out_filename=output_dir + "/rgb_projected_aria_und.jpg",
         point_color=(0, 0, 255),
     )
 
@@ -513,6 +427,6 @@ if __name__ == "__main__":
         rgb_imgs[0]["img_distorted"],
         rgb_imgs[0]["pose_distorted"],
         camera_rgb["params_distorted"],
-        out_filename="aria/outputs/ground_floor_aria_TEMP/rgb_projected_aria_distorted.jpg",
+        out_filename=output_dir + "/rgb_projected_aria_distorted.jpg",
         point_color=(0, 0, 255),
     )

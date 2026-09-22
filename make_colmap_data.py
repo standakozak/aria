@@ -35,12 +35,14 @@ def get_camera_params(
     return sensor_calib
 
 
-def get_undistorted_params(orig_calibration, rotate_90=True, crop_pixels=150, out_resolution=None):
+def get_undistorted_params(
+    orig_calibration, rotate_90=True, crop_pixels=150, out_size=None
+):
     input_calib_width = orig_calibration.get_image_size()[0]
     input_calib_height = orig_calibration.get_image_size()[1]
     input_calib_focal = orig_calibration.get_focal_lengths()[0]
-    if out_resolution is not None:
-        input_calib_width = input_calib_height = out_resolution
+    if out_size is not None:
+        input_calib_width = input_calib_height = out_size
 
     # Undistort the image
     pinhole = calibration.get_linear_camera_calibration(
@@ -71,7 +73,7 @@ def pinhole_params_to_str(camera_dict):
 
 def undistort_image(img_numpy, camera_dict, rotate_90=True):
     orig_calib = camera_dict["params_distorted"]
-    updated_calib = camera_dict["params_undistorted"]
+    updated_calib = camera_dict["params_undistorted_unrotated"]
 
     undistorted = distort_by_calibration(img_numpy, updated_calib, orig_calib)
     if rotate_90:
@@ -125,7 +127,7 @@ def load_images(provider, output_dir_parent, camera_dict):
                 "camera_id": camera_dict["id"],
                 "exposure": exposure,
                 "gain": gain,
-                "temperature": temperature
+                "temperature": temperature,
             }
         )
 
@@ -150,7 +152,10 @@ def save_image(undistorted_img, image_data, output_path):
     # If we have a reasonable exposure (0 < t < 30s), store as ExposureTime rational
     if exposure is not None and exposure > 0 and exposure < 30:
         frac = Fraction(exposure).limit_denominator(1000000)
-        exif_dict["Exif"][piexif.ExifIFD.ExposureTime] = (frac.numerator, frac.denominator)
+        exif_dict["Exif"][piexif.ExifIFD.ExposureTime] = (
+            frac.numerator,
+            frac.denominator,
+        )
 
     # Put full metadata into UserComment (JSON encoded)
     meta = {"exposure": exposure, "gain": gain, "temperature": temperature}
@@ -159,7 +164,8 @@ def save_image(undistorted_img, image_data, output_path):
     exif_bytes = piexif.dump(exif_dict)
     pil_img.save(output_path, "jpeg", exif=exif_bytes)
 
-def undistort_images(provider, output_dir_parent, subfolder, camera_dict):
+
+def undistort_images(provider, output_dir_parent, subfolder, camera_dict, limit=None):
     output_dir = output_dir_parent + "/images"
     if subfolder.strip() != "":
         output_dir = output_dir + "/" + subfolder
@@ -172,20 +178,20 @@ def undistort_images(provider, output_dir_parent, subfolder, camera_dict):
             )
 
     imgs = []
-    for data in default_camera_stream(provider, camera_dict):
+    for index, data in enumerate(default_camera_stream(provider, camera_dict)):
+        if limit is not None and index >= limit:
+            break
         img_timestamp = data.get_time_ns(TimeDomain.DEVICE_TIME)
         print("Timestamp: ", img_timestamp)
         image_data = data.image_data_and_record()
 
         # .copy() can be necessary, because undistortion uses the raw bytes
-        img = image_data[0].to_numpy_array()
+        orig_img = image_data[0].to_numpy_array()
         undistorted_img = cv2.cvtColor(
-            undistort_image(img, camera_dict), cv2.COLOR_RGB2BGR
+            undistort_image(orig_img.copy(), camera_dict), cv2.COLOR_RGB2BGR
         )
         if camera_dict["convert_grayscale"]:
             undistorted_img = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2GRAY)
-
-        # undistorted_img = np.rot90(img, k=3)  # TODO: remove, only for testing
 
         img_id = f"{camera_dict['id']}00{img_timestamp}"
         filename = f"{camera_dict['camera_label']}_{img_timestamp}.jpg"
@@ -201,6 +207,8 @@ def undistort_images(provider, output_dir_parent, subfolder, camera_dict):
                 "file": filename,
                 "subfolder": subfolder,
                 "camera_id": camera_dict["id"],
+                "img_distorted": orig_img,
+                "img_undistorted": undistorted_img,
             }
         )
 
@@ -257,8 +265,7 @@ def get_camera_infos(
     downsample_rate=1,
     convert_grayscale=False,
     crop_pixels=0,
-    rotate_90=True,
-    out_resolution=None
+    img_out_size=None,
 ):
     stream_id = provider.get_stream_id_from_label(camera_label)
     camera_info = {
@@ -271,8 +278,11 @@ def get_camera_infos(
     }
     orig_params = get_camera_params(provider, camera_label)
     camera_info["params_distorted"] = orig_params
-    camera_info["params_undistorted"] = get_undistorted_params(
-        orig_params, rotate_90=rotate_90, crop_pixels=crop_pixels, out_resolution=out_resolution
+    camera_info["params_undistorted_unrotated"] = get_undistorted_params(
+        orig_params, rotate_90=False, crop_pixels=crop_pixels, out_size=img_out_size
+    )
+    camera_info["params_undistorted"] = calibration.rotate_camera_calib_cw90deg(
+        camera_info["params_undistorted_unrotated"]
     )
     return camera_info
 
@@ -310,7 +320,6 @@ def load_point_cloud(
         {"uid": point.uid, "pos": point.position_world} for point in filtered_points
     ]
     return points_list
-
 
 
 def points_to_str(points):
@@ -353,7 +362,7 @@ if __name__ == "__main__":
         f"inputs/first_floor/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
     )
 
-    output_dir = "outputs/first_floor_TEMP"
+    output_dir = "outputs/first_floor_TEMP_updated"
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
 
@@ -369,10 +378,20 @@ if __name__ == "__main__":
         crop_pixels=150,
     )
     camera_left_slam = get_camera_infos(
-        provider, "camera-slam-left", 2, downsample_rate=DOWNSAMPLE_RATE, crop_pixels=0, out_resolution=680
+        provider,
+        "camera-slam-left",
+        2,
+        downsample_rate=DOWNSAMPLE_RATE,
+        crop_pixels=0,
+        img_out_size=680,
     )
     camera_right_slam = get_camera_infos(
-        provider, "camera-slam-right", 3, downsample_rate=DOWNSAMPLE_RATE, crop_pixels=0, out_resolution=680
+        provider,
+        "camera-slam-right",
+        3,
+        downsample_rate=DOWNSAMPLE_RATE,
+        crop_pixels=0,
+        img_out_size=680,
     )
     cameras = [camera_rgb]
     image_subfolders = [""]  # ["left", "right"] for slam cameras, [""] for RGB
