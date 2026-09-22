@@ -2,7 +2,7 @@ from projectaria_tools.core import data_provider
 from projectaria_tools.core.sensor_data import TimeDomain, TimeQueryOptions
 from projectaria_tools.core.stream_id import StreamId
 
-vrsfile = "inputs/94439916-b1ab-404b-9b30-716d0a0978a6.vrs"
+vrsfile = "inputs/first_floor/first_floor.vrs"
 
 provider = data_provider.create_vrs_data_provider(vrsfile)
 assert provider is not None, "Cannot open file"
@@ -76,11 +76,11 @@ print(sensor_calib.get_projection_params())  # 15 params
 import projectaria_tools.core.mps as mps
 
 open_loop_path = (
-    "inputs/mps_94439916-b1ab-404b-9b30-716d0a0978a6_vrs/slam/open_loop_trajectory.csv"
+    "inputs/first_floor/mps_first_floor_vrs/slam/open_loop_trajectory.csv"
 )
 open_loop_traj = mps.read_open_loop_trajectory(open_loop_path)
 
-closed_loop_path = "inputs/mps_94439916-b1ab-404b-9b30-716d0a0978a6_vrs/slam/closed_loop_trajectory.csv"
+closed_loop_path = "inputs/first_floor/mps_first_floor_vrs/slam/closed_loop_trajectory.csv"
 closed_loop_traj = mps.read_closed_loop_trajectory(closed_loop_path)
 
 # example: get transformation from this device to a world coordinate frame
@@ -100,7 +100,7 @@ if pose_info:
     T_world_device = pose_info.transform_world_device
 
     # Move this pose to the Project Aria RGB camera
-    vrs_file = "inputs/94439916-b1ab-404b-9b30-716d0a0978a6.vrs"
+    vrs_file = "inputs/first_floor/first_floor.vrs"
     vrs_data_provider = data_provider.create_vrs_data_provider(vrs_file)
     rgb_stream_id = StreamId("214-1")
     rgb_stream_label = vrs_data_provider.get_label_from_stream_id(rgb_stream_id)
@@ -120,5 +120,6 @@ if pose_info:
     )
     print(image_data[0].to_numpy_array())
     print(dir(image_data[1]))
+    print(f"Gain: {image_data[1].gain}, exposure: {image_data[1].exposure_duration}, temperature: {image_data[1].temperature}")
 
 

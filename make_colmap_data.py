@@ -14,6 +14,9 @@ from typing import Literal
 import cv2
 import numpy as np
 import os
+from PIL import Image
+from fractions import Fraction
+import json
 
 
 def load_vrs(vrs_file: str) -> VrsDataProvider:
@@ -41,10 +44,12 @@ def get_camera_params(
 #    return transform_device_sensor
 
 
-def get_undistorted_params(orig_calibration, rotate_90=True, crop_pixels=150):
+def get_undistorted_params(orig_calibration, rotate_90=True, crop_pixels=150, out_resolution=None):
     input_calib_width = orig_calibration.get_image_size()[0]
     input_calib_height = orig_calibration.get_image_size()[1]
     input_calib_focal = orig_calibration.get_focal_lengths()[0]
+    if out_resolution is not None:
+        input_calib_width = input_calib_height = out_resolution
 
     # Undistort the image
     pinhole = calibration.get_linear_camera_calibration(
@@ -66,7 +71,7 @@ def pinhole_params_to_str(camera_dict):
     """
     params = (
         [camera_dict["id"], "PINHOLE"]
-        + camera_dict["undistorted_params"].get_image_size().tolist()
+        + camera_dict["undistorted_params"].get_image_size().tolist()[::-1]
         + camera_dict["undistorted_params"].get_projection_params().tolist()
     )
     params = [str(x) for x in params]
@@ -107,7 +112,7 @@ def load_images(provider, output_dir_parent, camera_dict):
     imgs_numpy = []
     for data in default_camera_stream(provider, camera_dict):
         img_timestamp = data.get_time_ns(TimeDomain.DEVICE_TIME)
-        print("Timestamp: ", img_timestamp)
+        print("Processing timestamp: ", img_timestamp)
         image_data = data.image_data_and_record()
 
         img = image_data[0].to_numpy_array()
@@ -116,6 +121,10 @@ def load_images(provider, output_dir_parent, camera_dict):
         filename = f"{img_timestamp}_{camera_dict['camera_label']}.jpg"
         output_path = f"{output_dir}/{filename}"
 
+        exposure = image_data[1].exposure_duration
+        gain = image_data[1].gain
+        temperature = image_data[1].temperature
+
         imgs.append(
             {
                 "id": f"{img_timestamp}_{camera_dict['camera_label']}",
@@ -123,16 +132,60 @@ def load_images(provider, output_dir_parent, camera_dict):
                 "path": output_path,
                 "file": filename,
                 "camera_id": camera_dict["id"],
+                "exposure": exposure,
+                "gain": gain,
+                "temperature": temperature
             }
         )
 
     return imgs, imgs_numpy
 
 
-def undistort_images(provider, output_dir_parent, camera_dict):
+def save_image(undistorted_img, image_data, output_path):
+    # extract capture metadata
+    exposure = image_data[1].exposure_duration
+    gain = image_data[1].gain
+    temperature = image_data[1].temperature
+
+
+    # Try to write EXIF using piexif + Pillow. If unavailable, write image with OpenCV
+    # and save a sidecar JSON with the same metadata.
+    try:
+        import piexif
+        from piexif.helper import UserComment
+
+        # prepare PIL image (convert BGR->RGB for color)
+        if undistorted_img.ndim == 2:
+            pil_img = Image.fromarray(undistorted_img)
+        else:
+            rgb = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+
+        exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+
+        # If we have a reasonable exposure (0 < t < 30s), store as ExposureTime rational
+        if exposure is not None and exposure > 0 and exposure < 30:
+            frac = Fraction(exposure).limit_denominator(1000000)
+            exif_dict["Exif"][piexif.ExifIFD.ExposureTime] = (frac.numerator, frac.denominator)
+
+        # Put full metadata into UserComment (JSON encoded)
+        meta = {"exposure": exposure, "gain": gain, "temperature": temperature}
+        exif_dict["Exif"][piexif.ExifIFD.UserComment] = UserComment.dump(json.dumps(meta))
+
+        exif_bytes = piexif.dump(exif_dict)
+        pil_img.save(output_path, "jpeg", exif=exif_bytes)
+    except ImportError:
+        print("piexif could not be imported. Saving images without EXIF tags")
+        # fallback: write image with OpenCV and save sidecar JSON
+        cv2.imwrite(output_path, undistorted_img)
+
+
+def undistort_images(provider, output_dir_parent, subfolder, camera_dict):
     output_dir = output_dir_parent + "/images"
+    if subfolder.strip() != "":
+        output_dir = output_dir + "/" + subfolder
     if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
+        os.makedirs(output_dir)
     else:
         if os.listdir(output_dir):
             print(
@@ -153,10 +206,13 @@ def undistort_images(provider, output_dir_parent, camera_dict):
         if camera_dict["convert_grayscale"]:
             undistorted_img = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2GRAY)
 
+        # undistorted_img = np.rot90(img, k=3)  # TODO: remove, only for testing
+
         img_id = f"{camera_dict['id']}00{img_timestamp}"
         filename = f"{camera_dict['camera_label']}_{img_timestamp}.jpg"
         output_path = f"{output_dir}/{filename}"
-        cv2.imwrite(output_path, undistorted_img)
+
+        save_image(undistorted_img, image_data, output_path)
 
         imgs.append(
             {
@@ -164,6 +220,7 @@ def undistort_images(provider, output_dir_parent, camera_dict):
                 "timestamp": img_timestamp,
                 "path": output_path,
                 "file": filename,
+                "subfolder": subfolder,
                 "camera_id": camera_dict["id"],
             }
         )
@@ -221,6 +278,8 @@ def get_camera_infos(
     downsample_rate=1,
     convert_grayscale=False,
     crop_pixels=0,
+    rotate_90=True,
+    out_resolution=None
 ):
     stream_id = provider.get_stream_id_from_label(camera_label)
     camera_info = {
@@ -234,7 +293,7 @@ def get_camera_infos(
     orig_params = get_camera_params(provider, camera_label)
     camera_info["distorted_params"] = orig_params
     camera_info["undistorted_params"] = get_undistorted_params(
-        orig_params, rotate_90=True, crop_pixels=crop_pixels
+        orig_params, rotate_90=rotate_90, crop_pixels=crop_pixels, out_resolution=out_resolution
     )
     return camera_info
 
@@ -242,11 +301,15 @@ def get_camera_infos(
 def images_to_str(img_infos):
     img_strings = []
     for img in img_infos:
+        if img["subfolder"] != "":
+            file = img["subfolder"] + "/" + img["file"]
+        else:
+            file = img["file"]
         img_info_list = [
             img["id"],
             img["quat_trans"],
             img["camera_id"],
-            img["file"],
+            file,
         ]
         img_strings.append(" ".join([str(x) for x in img_info_list]))
         img_strings.append("")  # Empty newline
@@ -384,15 +447,20 @@ def save_data(path, camera_dicts, image_list, points_list):
 
 
 if __name__ == "__main__":
-    filename = "94439916-b1ab-404b-9b30-716d0a0978a6"
-    vrsfile = f"inputs/{filename}.vrs"
-    closed_trajectory = f"inputs/mps_{filename}_vrs/slam/closed_loop_trajectory.csv"
-    semidense_points = f"inputs/mps_{filename}_vrs/slam/semidense_points.csv.gz"
+    DOWNSAMPLE_RATE = 5
+    filename = "first_floor"
+    vrsfile = f"inputs/first_floor/{filename}.vrs"
+    closed_trajectory = (
+        f"inputs/first_floor/mps_{filename}_vrs/slam/closed_loop_trajectory.csv"
+    )
+    semidense_points = (
+        f"inputs/first_floor/mps_{filename}_vrs/slam/semidense_points.csv.gz"
+    )
     semidense_observations = (
-        f"inputs/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
+        f"inputs/first_floor/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
     )
 
-    output_dir = "outputs/ground_floor_aria_grayscale"
+    output_dir = "outputs/first_floor_grayscale_downsample5"
 
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
@@ -404,18 +472,19 @@ if __name__ == "__main__":
         provider,
         "camera-rgb",
         1,
-        downsample_rate=1,
-        convert_grayscale=True,
+        downsample_rate=DOWNSAMPLE_RATE,
+        convert_grayscale=False,
         crop_pixels=150,
     )
     camera_left_slam = get_camera_infos(
-        provider, "camera-slam-left", 2, downsample_rate=5, crop_pixels=0
+        provider, "camera-slam-left", 2, downsample_rate=DOWNSAMPLE_RATE, crop_pixels=0, out_resolution=680
     )
     camera_right_slam = get_camera_infos(
-        provider, "camera-slam-right", 3, downsample_rate=5, crop_pixels=0
+        provider, "camera-slam-right", 3, downsample_rate=DOWNSAMPLE_RATE, crop_pixels=0, out_resolution=680
     )
-    cameras = [camera_left_slam, camera_rgb, camera_right_slam]
-    test_camera = camera_left_slam
+    cameras = [camera_left_slam, camera_right_slam]
+    image_subfolders = ["left", "right"]
+    test_camera = camera_rgb
 
     print(
         f"Distorted camera parameters ({test_camera['camera_label']}):",
@@ -429,10 +498,11 @@ if __name__ == "__main__":
 
     ### IMAGES
     images = []
-    for camera in cameras:
+    for camera, subfolder in zip(cameras, image_subfolders):
         camera_images = undistort_images(
             provider,
             output_dir,
+            subfolder,
             camera_dict=camera,
         )
         camera_images = get_images_pose(
