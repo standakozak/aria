@@ -65,9 +65,9 @@ if __name__ == "__main__":
     provider = load_vrs(vrsfile)
 
     camera_rgb = get_camera_infos(provider, "camera-rgb", 1)
-    print("Distorted camera parameters:", camera_rgb["distorted_params"], end="\n\n")
+    print("Distorted camera parameters:", camera_rgb["params_distorted"], end="\n\n")
     print(
-        "Undistorted camera parameters:", camera_rgb["undistorted_params"], end="\n\n"
+        "Undistorted camera parameters:", camera_rgb["params_undistorted"], end="\n\n"
     )
     print(pinhole_params_to_str(camera_rgb))
 

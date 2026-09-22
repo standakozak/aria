@@ -1,22 +1,22 @@
-from projectaria_tools.core import data_provider, calibration
-from projectaria_tools.core.sensor_data import TimeDomain
-from projectaria_tools.core.data_provider import VrsDataProvider
-from projectaria_tools.core.calibration import distort_by_calibration
-import projectaria_tools.core.mps as mps
-from projectaria_tools.core.mps.utils import (
-    get_nearest_pose,
-    filter_points_from_confidence,
-)
-
-
-from collections import defaultdict
+import json
+import os
+from fractions import Fraction
 from typing import Literal
+
 import cv2
 import numpy as np
-import os
+import piexif
+from piexif.helper import UserComment
 from PIL import Image
-from fractions import Fraction
-import json
+from projectaria_tools.core.mps.utils import (
+    filter_points_from_confidence,
+    get_nearest_pose,
+)
+from projectaria_tools.core.sensor_data import TimeDomain
+
+from projectaria_tools.core import calibration, data_provider, mps
+from projectaria_tools.core.calibration import distort_by_calibration
+from projectaria_tools.core.data_provider import VrsDataProvider
 
 
 def load_vrs(vrs_file: str) -> VrsDataProvider:
@@ -33,15 +33,6 @@ def get_camera_params(
     sensor_calib = device_calib.get_camera_calib(camera_label)
 
     return sensor_calib
-
-
-# def get_camera_extrinsics(
-#    provider,
-#    camera_label: Literal["camera-slam-left", "camera-slam-right", "camera-rgb"],
-# ):
-#    device_calib = provider.get_device_calibration()
-#    transform_device_sensor = device_calib.get_transform_device_sensor(camera_label)
-#    return transform_device_sensor
 
 
 def get_undistorted_params(orig_calibration, rotate_90=True, crop_pixels=150, out_resolution=None):
@@ -71,16 +62,16 @@ def pinhole_params_to_str(camera_dict):
     """
     params = (
         [camera_dict["id"], "PINHOLE"]
-        + camera_dict["undistorted_params"].get_image_size().tolist()[::-1]
-        + camera_dict["undistorted_params"].get_projection_params().tolist()
+        + camera_dict["params_undistorted"].get_image_size().tolist()[::-1]
+        + camera_dict["params_undistorted"].get_projection_params().tolist()
     )
     params = [str(x) for x in params]
     return " ".join(params)
 
 
 def undistort_image(img_numpy, camera_dict, rotate_90=True):
-    orig_calib = camera_dict["distorted_params"]
-    updated_calib = camera_dict["undistorted_params"]
+    orig_calib = camera_dict["params_distorted"]
+    updated_calib = camera_dict["params_undistorted"]
 
     undistorted = distort_by_calibration(img_numpy, updated_calib, orig_calib)
     if rotate_90:
@@ -147,38 +138,26 @@ def save_image(undistorted_img, image_data, output_path):
     gain = image_data[1].gain
     temperature = image_data[1].temperature
 
+    # Write EXIF using piexif + Pillow.
+    if undistorted_img.ndim == 2:
+        pil_img = Image.fromarray(undistorted_img)
+    else:
+        rgb = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
 
-    # Try to write EXIF using piexif + Pillow. If unavailable, write image with OpenCV
-    # and save a sidecar JSON with the same metadata.
-    try:
-        import piexif
-        from piexif.helper import UserComment
+    exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
 
-        # prepare PIL image (convert BGR->RGB for color)
-        if undistorted_img.ndim == 2:
-            pil_img = Image.fromarray(undistorted_img)
-        else:
-            rgb = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(rgb)
+    # If we have a reasonable exposure (0 < t < 30s), store as ExposureTime rational
+    if exposure is not None and exposure > 0 and exposure < 30:
+        frac = Fraction(exposure).limit_denominator(1000000)
+        exif_dict["Exif"][piexif.ExifIFD.ExposureTime] = (frac.numerator, frac.denominator)
 
-        exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+    # Put full metadata into UserComment (JSON encoded)
+    meta = {"exposure": exposure, "gain": gain, "temperature": temperature}
+    exif_dict["Exif"][piexif.ExifIFD.UserComment] = UserComment.dump(json.dumps(meta))
 
-        # If we have a reasonable exposure (0 < t < 30s), store as ExposureTime rational
-        if exposure is not None and exposure > 0 and exposure < 30:
-            frac = Fraction(exposure).limit_denominator(1000000)
-            exif_dict["Exif"][piexif.ExifIFD.ExposureTime] = (frac.numerator, frac.denominator)
-
-        # Put full metadata into UserComment (JSON encoded)
-        meta = {"exposure": exposure, "gain": gain, "temperature": temperature}
-        exif_dict["Exif"][piexif.ExifIFD.UserComment] = UserComment.dump(json.dumps(meta))
-
-        exif_bytes = piexif.dump(exif_dict)
-        pil_img.save(output_path, "jpeg", exif=exif_bytes)
-    except ImportError:
-        print("piexif could not be imported. Saving images without EXIF tags")
-        # fallback: write image with OpenCV and save sidecar JSON
-        cv2.imwrite(output_path, undistorted_img)
-
+    exif_bytes = piexif.dump(exif_dict)
+    pil_img.save(output_path, "jpeg", exif=exif_bytes)
 
 def undistort_images(provider, output_dir_parent, subfolder, camera_dict):
     output_dir = output_dir_parent + "/images"
@@ -257,7 +236,7 @@ def get_images_pose(img_infos, camera, closed_trajectory_file, delete_wout_poses
     imgs_with_poses = []
     for img_dict in img_infos:
         camera_pose = get_camera_pose(
-            trajectory, camera["undistorted_params"], img_dict["timestamp"]
+            trajectory, camera["params_undistorted"], img_dict["timestamp"]
         )
         if camera_pose is None:
             if delete_wout_poses:
@@ -291,8 +270,8 @@ def get_camera_infos(
         "crop_pixels": crop_pixels,
     }
     orig_params = get_camera_params(provider, camera_label)
-    camera_info["distorted_params"] = orig_params
-    camera_info["undistorted_params"] = get_undistorted_params(
+    camera_info["params_distorted"] = orig_params
+    camera_info["params_undistorted"] = get_undistorted_params(
         orig_params, rotate_90=rotate_90, crop_pixels=crop_pixels, out_resolution=out_resolution
     )
     return camera_info
@@ -332,92 +311,6 @@ def load_point_cloud(
     ]
     return points_list
 
-
-def load_observations(path, points=None):
-    ## Returns a list of point observations with the attributes:
-    # uid - point uid
-    # frame_tracking_timestamp_us - Aria device timestamp of the host frame’s center of exposure, in microsecond
-    # camera_serial - The serial number of the camera which observes this point
-    # u, v - The sub-pixel-accuracy observed measurements of the point in pixels, in the observing frame’s camera
-    observations = mps.read_point_observations(path)
-    if points is not None:
-        ## Filter the observations of the given points, only
-
-        points_uid = [x["uid"] for x in points]
-
-        """from datetime import datetime
-
-        now = datetime.now
-        point_load = now()
-        print("Point uid loading:", now() - point_load)
-
-        new_observations = []
-        for x in observations:
-            observation_load = now()
-
-            if x.point_uid in points_uid:
-                new_observations.append(x)
-            print("Observation filter:", now() - observation_load)
-        
-
-        max_min = {}
-        for x in observations:
-            if x.camera_serial not in max_min:
-                max_min[x.camera_serial] = {
-                    "min_u": x.uv[0],
-                    "max_u": x.uv[0],
-                    "min_v": x.uv[1],
-                    "max_v": x.uv[1],
-                }
-            if x.uv[0] < max_min[x.camera_serial]["min_u"]:
-                max_min[x.camera_serial]["min_u"] = x.uv[0]
-            if x.uv[0] > max_min[x.camera_serial]["max_u"]:
-                max_min[x.camera_serial]["max_u"] = x.uv[0]
-            if x.uv[1] < max_min[x.camera_serial]["min_v"]:
-                max_min[x.camera_serial]["min_v"] = x.uv[1]
-            if x.uv[1] > max_min[x.camera_serial]["max_v"]:
-                max_min[x.camera_serial]["max_v"] = x.uv[1]
-        print(max_min)
-        
-        print(*list(set(x.camera_serial for x in observations)), sep="\n")
-        """
-        observations = (x for x in observations if x.point_uid in points_uid)
-
-    return [
-        {
-            "point_uid": x.point_uid,
-            "uv": x.uv,
-            "frame_timestamp": x.frame_capture_timestamp,
-            "camera_serial": x.camera_serial,
-        }
-        for x in observations
-    ]
-
-
-def get_point_colors(points, observations):
-    pixels_by_uid = defaultdict(list)
-    for obs in observations:
-        pixels_by_uid[obs.uid].append(
-            (
-                obs.frame_tracking_timestamp_us,
-                obs.camera_serial,
-                obs.u,
-                obs.v,
-            )
-        )
-
-    for point in points:
-        point["observations"] = pixels_by_uid.get(point["uid"], [])
-
-    return points
-
-
-def add_image_observations(provider, images, observations):
-    # TODO: undistortion of the observation points is needed, as well
-    print(images[0])
-    print(observations[0])
-
-    return images
 
 
 def points_to_str(points):
@@ -460,8 +353,7 @@ if __name__ == "__main__":
         f"inputs/first_floor/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
     )
 
-    output_dir = "outputs/first_floor_grayscale_downsample5"
-
+    output_dir = "outputs/first_floor_TEMP"
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
 
@@ -482,17 +374,17 @@ if __name__ == "__main__":
     camera_right_slam = get_camera_infos(
         provider, "camera-slam-right", 3, downsample_rate=DOWNSAMPLE_RATE, crop_pixels=0, out_resolution=680
     )
-    cameras = [camera_left_slam, camera_right_slam]
-    image_subfolders = ["left", "right"]
+    cameras = [camera_rgb]
+    image_subfolders = [""]  # ["left", "right"] for slam cameras, [""] for RGB
     test_camera = camera_rgb
 
     print(
         f"Distorted camera parameters ({test_camera['camera_label']}):",
-        test_camera["distorted_params"],
+        test_camera["params_distorted"],
         end="\n\n",
     )
     print(
-        "Undistorted camera parameters:", test_camera["undistorted_params"], end="\n\n"
+        "Undistorted camera parameters:", test_camera["params_undistorted"], end="\n\n"
     )
     print(pinhole_params_to_str(test_camera))
 
@@ -538,11 +430,6 @@ if __name__ == "__main__":
         inverse_distance_std_threshold=0.001,
         distance_std_threshold=0.05,
     )
-    # observations = load_observations(semidense_observations, points=point_positions)
-    # print("Observations loaded!")
-
-    # images = add_image_observations(provider, images, observations)
-
     ### OUTPUT
     save_data(sparse_dir, cameras, images, point_positions)
 
