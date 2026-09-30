@@ -3,6 +3,8 @@ import random
 from random import sample
 
 import cv2
+from projectaria_tools.core import mps
+
 from make_colmap_data import (
     get_camera_infos,
     get_nearest_pose,
@@ -14,9 +16,8 @@ from make_colmap_data import (
     undistort_images,
 )
 
-from projectaria_tools.core import mps
-
 random.seed(0)
+
 
 def load_observations(path, points=None, timestamp_min=None, timestamp_max=None):
     ## Returns a list of point observations with the attributes:
@@ -85,7 +86,7 @@ def get_metric_depth(point_world, T_camera_world):
     determined by the extrinsic transform.
     """
     point_camera = T_camera_world @ point_world["pos"]
-    return float(point_camera[2])
+    return float(point_camera.flatten()[2])
 
 
 def get_point_projection(point_world, T_camera_world, camera_params):
@@ -142,6 +143,40 @@ def get_images_pose(img_infos, camera, closed_trajectory_file, delete_wout_poses
     return imgs_with_poses
 
 
+def is_pixel_in_bounds(uv, width, height):
+    return bool((0 <= uv[0] < width) and (0 <= uv[1] < height))
+
+
+def get_sparse_rgbd(points, rgb_img, T_camera_world, camera_params):
+    ## NOTE: uses nearest pixel interpolation
+    rgbd_data = []
+
+    img_width = camera_params.get_image_size()[0]
+    img_height = camera_params.get_image_size()[1]
+
+    for point in points:
+        projected_point_uv = get_point_projection(point, T_camera_world, camera_params)
+        depth = get_metric_depth(point, T_camera_world)
+        bgr = None
+        uv_rounded = (round(projected_point_uv[0]), round(projected_point_uv[1]))
+        pixel_valid = is_pixel_in_bounds(uv_rounded, img_width, img_height)
+
+        if pixel_valid:
+            bgr = rgb_img[uv_rounded]
+        rgbd_data.append(
+            {
+                "point": point,
+                "valid": pixel_valid,
+                "depth": depth,
+                "bgr": bgr,
+                "uv": projected_point_uv,
+                "uv_rounded": uv_rounded,
+            }
+        )
+
+    return rgbd_data
+
+
 def project_points_to_img(
     points,
     orig_img,
@@ -162,9 +197,8 @@ def project_points_to_img(
     for point in points:
         projected_point = get_point_projection(point, T_camera_world, camera_params)
         projections.append(projected_point)
-        if check_bounds and not (
-            (0 <= projected_point[0] <= img_width)
-            and (0 <= projected_point[1] <= img_height)
+        if check_bounds and not is_pixel_in_bounds(
+            projected_point, img_width, img_height
         ):
             out_of_bounds_points += 1
             continue
@@ -185,12 +219,14 @@ if __name__ == "__main__":
     closed_trajectory = (
         f"inputs/{filename}/mps_{filename}_vrs/slam/closed_loop_trajectory.csv"
     )
-    semidense_points = f"inputs/{filename}/mps_{filename}_vrs/slam/semidense_points.csv.gz"
+    semidense_points = (
+        f"inputs/{filename}/mps_{filename}_vrs/slam/semidense_points.csv.gz"
+    )
     semidense_observations = (
         f"inputs/{filename}/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
     )
 
-    output_dir = "outputs/ground_floor_aria_TEMP_updated"
+    output_dir = "outputs/ground_floor_aria_TEMP"
 
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
@@ -244,7 +280,11 @@ if __name__ == "__main__":
 
     ## RGB images
     rgb_images = undistort_images(
-        provider=provider, output_dir_parent=output_dir, subfolder="rgb", camera_dict=camera_rgb, limit=1
+        provider=provider,
+        output_dir_parent=output_dir,
+        subfolder="rgb",
+        camera_dict=camera_rgb,
+        limit=1,
     )
     rgb_img = rgb_images[0]  # NOTE: testing on a single image
     rgb_imgs = get_images_pose(
@@ -430,3 +470,11 @@ if __name__ == "__main__":
         out_filename=output_dir + "/rgb_projected_aria_distorted.jpg",
         point_color=(0, 0, 255),
     )
+
+    rgbd_data = get_sparse_rgbd(
+        point_positions_union,
+        rgb_imgs[0]["img_undistorted"],
+        rgb_imgs[0]["pose_undistorted"],
+        camera_rgb["params_undistorted"],
+    )
+    print()
