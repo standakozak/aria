@@ -165,7 +165,7 @@ def save_image(undistorted_img, image_data, output_path):
     pil_img.save(output_path, "jpeg", exif=exif_bytes)
 
 
-def undistort_images(provider, output_dir_parent, subfolder, camera_dict, limit=None):
+def undistort_images(provider, output_dir_parent, subfolder, camera_dict, limit=None, timestamp_name_first=False):
     output_dir = output_dir_parent + "/images"
     if subfolder.strip() != "":
         output_dir = output_dir + "/" + subfolder
@@ -195,6 +195,9 @@ def undistort_images(provider, output_dir_parent, subfolder, camera_dict, limit=
 
         img_id = f"{camera_dict['id']}00{img_timestamp}"
         filename = f"{camera_dict['camera_label']}_{img_timestamp}.jpg"
+        if timestamp_name_first:
+            filename = f"img_{img_timestamp}_{camera_dict['camera_label']}.jpg"
+                    
         output_path = f"{output_dir}/{filename}"
 
         save_image(undistorted_img, image_data, output_path)
@@ -349,7 +352,7 @@ def save_data(path, camera_dicts, image_list, points_list):
 
 
 if __name__ == "__main__":
-    DOWNSAMPLE_RATE = 5
+    DOWNSAMPLE_RATE = 3
     filename = "first_floor"
     vrsfile = f"inputs/first_floor/{filename}.vrs"
     closed_trajectory = (
@@ -362,7 +365,7 @@ if __name__ == "__main__":
         f"inputs/first_floor/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
     )
 
-    output_dir = "outputs/first_floor_TEMP_updated"
+    output_dir = "outputs/first_floor_grayscale_da3_downsample3"
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
 
@@ -393,8 +396,9 @@ if __name__ == "__main__":
         crop_pixels=0,
         img_out_size=680,
     )
-    cameras = [camera_rgb]
-    image_subfolders = [""]  # ["left", "right"] for slam cameras, [""] for RGB
+    cameras = [camera_left_slam, camera_right_slam]
+    image_subfolders = ["left", "right"]  # ["left", "right"] for slam cameras, [""] for RGB
+    TIMESTAMP_NAME_FIRST = True  # Use {timestamp}_{camera} instead of {camera}_{timestamp} for image names
     test_camera = camera_rgb
 
     print(
@@ -415,6 +419,7 @@ if __name__ == "__main__":
             output_dir,
             subfolder,
             camera_dict=camera,
+            timestamp_name_first=TIMESTAMP_NAME_FIRST
         )
         camera_images = get_images_pose(
             camera_images, camera, closed_trajectory, delete_wout_poses=True

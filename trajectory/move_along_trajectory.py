@@ -88,9 +88,10 @@ def ensure_camera_prim(stage, camera_path):
         prim = stage.DefinePrim(camera_path, "Camera")
 
     camera = UsdGeom.Camera(prim)
-    camera.CreateFocalLengthAttr(24.0)
-    camera.CreateHorizontalApertureAttr(20.955)
-    camera.CreateVerticalApertureAttr(20.955 * 9.0 / 16.0)
+    camera.CreateFocalLengthAttr(15.0)
+    camera.GetFocusDistanceAttr().Set(10.0)
+    # camera.CreateHorizontalApertureAttr(20.955)
+    # camera.CreateVerticalApertureAttr(20.955 * 9.0 / 16.0)
     return prim
 
 

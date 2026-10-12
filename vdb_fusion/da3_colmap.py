@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
 import shutil
 import sys
 import time
@@ -47,7 +48,54 @@ def parse_args():
     p.add_argument("--no-align-to-input-ext-scale", action="store_true", help="Disable DA3 COLMAP scale alignment")
     p.add_argument("--conf-thresh-percentile", type=float, default=40.0)
     p.add_argument("--overwrite", action="store_true", help="Replace existing frame NPZ files")
+    p.add_argument(
+        "--random",
+        action="store_true",
+        help=(
+            "Randomize frame order before windowing. If multiple camera streams are present, "
+            "each camera is shuffled independently to avoid mixing left/right streams; "
+            "with a single camera, the full image list is shuffled."
+        ),
+    )
     return p.parse_args()
+
+
+def _camera_key(image_path: str) -> str:
+    path = Path(image_path)
+    if len(path.parts) >= 2 and path.parts[-2] not in ("", "."):
+        return path.parts[-2]
+    if str(path.parent) not in ("", "."):
+        return path.parent.name
+    return ""
+
+
+def _reorder_by_indices(images, extrinsics, intrinsics, order):
+    return ([images[i] for i in order], np.asarray(extrinsics)[order], np.asarray(intrinsics)[order])
+
+
+def _randomize_image_order(images, extrinsics, intrinsics):
+    if not images:
+        return images, extrinsics, intrinsics
+
+    # Randomizing across all images can mix sensor streams and destroy the temporal
+    # structure that these inference windows rely on. Prefer randomizing within each
+    # camera group; for a single-camera dataset, shuffle the whole list.
+    groups = {}
+    for idx, image_path in enumerate(images):
+        groups.setdefault(_camera_key(image_path), []).append(idx)
+
+    rng = random.Random(42)
+    order = []
+    if len(groups) <= 1:
+        order = list(range(len(images)))
+        rng.shuffle(order)
+        return _reorder_by_indices(images, extrinsics, intrinsics, order)
+
+    for camera_group in groups:
+        idxs = groups[camera_group][:]
+        rng.shuffle(idxs)
+        order.extend(idxs)
+    return _reorder_by_indices(images, extrinsics, intrinsics, order)
 
 
 def _relative_output(image_path: str, images_root: Path) -> Path:
@@ -123,6 +171,8 @@ def main():
 
     ColmapHandler = _colmap_handler()
     images, extrinsics, intrinsics = ColmapHandler.process(str(colmap_dir), args.sparse_subdir)
+    if args.random:
+        images, extrinsics, intrinsics = _randomize_image_order(images, extrinsics, intrinsics)
     export_dir.mkdir(parents=True, exist_ok=True)
     images_root = colmap_dir / "images"
 

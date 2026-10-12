@@ -19,7 +19,7 @@ DEFAULT_INPUT = Path(
     "/home/stani/slam/Depth-Anything-3/workspace/gallery/my_group/first_floor_3dgrut_exif_30_npz"
 )
 DEFAULT_COLMAP = Path(
-    "/home/stani/slam/Depth-Anything-3/inputs/first_floor_3dgrut_exif_30/sparse"
+    "/home/stani/slam/Depth-Anything-3/inputs/first_floor_grayscale_da3_downsample3/sparse"
 )
 
 
@@ -330,7 +330,7 @@ def main():
         images_dir = a.images_dir or (sparse_dir.parent / "images")
         frames = load_npy_frames(root, cameras_txt, images_txt, images_dir)
     print("Depth maps loaded")
-    volume = vdbfusion.VDBVolume(a.voxel_size, a.sdf_trunc)
+    volume = vdbfusion.VDBVolume(a.voxel_size, a.sdf_trunc, space_carving=True)
     integrated = 0
     debug_visualized = 0
     for depth, w2c, K, conf, label in frames:

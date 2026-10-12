@@ -68,6 +68,8 @@ else:
     cam_prim = stage.GetPrimAtPath(camera_path)
 
 camera = UsdGeom.Camera(cam_prim)
+camera.GetFocusDistanceAttr().Set(10.0)
+camera.GetFocalLengthAttr().Set(15.0)
 
 viewport = get_active_viewport()
 if viewport is None:
