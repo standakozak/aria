@@ -269,8 +269,11 @@ def get_camera_infos(
     convert_grayscale=False,
     crop_pixels=0,
     img_out_size=None,
+    color_correction=True,
 ):
     stream_id = provider.get_stream_id_from_label(camera_label)
+    if color_correction:
+        provider.set_color_correction(True)
     camera_info = {
         "id": camera_id,
         "stream_id": stream_id,
@@ -352,7 +355,7 @@ def save_data(path, camera_dicts, image_list, points_list):
 
 
 if __name__ == "__main__":
-    DOWNSAMPLE_RATE = 3
+    DOWNSAMPLE_RATE = 1
     filename = "first_floor"
     vrsfile = f"inputs/first_floor/{filename}.vrs"
     closed_trajectory = (
@@ -365,7 +368,7 @@ if __name__ == "__main__":
         f"inputs/first_floor/mps_{filename}_vrs/slam/semidense_observations.csv.gz"
     )
 
-    output_dir = "outputs/first_floor_grayscale_da3_downsample3"
+    output_dir = "outputs/first_floor_color_corrected"
     sparse_dir = output_dir + "/sparse_prior"
     os.makedirs(sparse_dir, exist_ok=True)
 
@@ -379,6 +382,7 @@ if __name__ == "__main__":
         downsample_rate=DOWNSAMPLE_RATE,
         convert_grayscale=False,
         crop_pixels=150,
+        color_correction=True
     )
     camera_left_slam = get_camera_infos(
         provider,
@@ -396,8 +400,8 @@ if __name__ == "__main__":
         crop_pixels=0,
         img_out_size=680,
     )
-    cameras = [camera_left_slam, camera_right_slam]
-    image_subfolders = ["left", "right"]  # ["left", "right"] for slam cameras, [""] for RGB
+    cameras = [camera_rgb]
+    image_subfolders = [""]  # ["left", "right"] for slam cameras, [""] for RGB
     TIMESTAMP_NAME_FIRST = True  # Use {timestamp}_{camera} instead of {camera}_{timestamp} for image names
     test_camera = camera_rgb
 

@@ -16,10 +16,10 @@ import open3d as o3d
 import vdbfusion
 
 DEFAULT_INPUT = Path(
-    "/home/stani/slam/Depth-Anything-3/workspace/gallery/my_group/first_floor_3dgrut_exif_30_npz"
+    "Depth-Anything-3/workspace/gallery/my_group/project"
 )
 DEFAULT_COLMAP = Path(
-    "/home/stani/slam/Depth-Anything-3/inputs/first_floor_grayscale_da3_downsample3/sparse"
+    "Depth-Anything-3/inputs/colmap_dataset/sparse"
 )
 
 
@@ -80,7 +80,7 @@ def arguments():
         "--confidence-percentile",
         type=float,
         default=0.0,
-        help="Drop pixels below per-frame confidence percentile; 0 disables",
+        help="Drop pixels below per-frame confidence percentile; 0 disables. Using --confidence-threshold is more preferable.",
     )
     p.add_argument(
             "--confidence-threshold",
