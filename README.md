@@ -1,7 +1,7 @@
 # Digital twin reconstruction with Project Aria Glasses
 ## Export an Aria recording to COLMAP
 ```powershell
-python make_colmap_data.py inputs/first_floor/first_floor.vrs \
+python preprocess_data.py inputs/first_floor/first_floor.vrs \
 --output-dir outputs/first_floor
 ```
 Undistorts the camera images to a pinhole model and writes a COLMAP text model (`sparse_prior/cameras.txt`, `images.txt`, `points3D.txt`) with poses from the MPS closed-loop trajectory and the MPS semidense point cloud. The MPS files are looked up in `<vrs dir>/mps_<vrs name>_vrs/slam` (override with `--mps-dir`, `--trajectory`, `--points`).
@@ -25,7 +25,7 @@ da3 backend --host 0.0.0.0 \
 ```
 ### 3. Run DA3 inference on a COLMAP dataset with sliding window
 ```powershell
-python vdb_fusion/da3_colmap.py \
+python run_da3_inference.py \
 /path/to/colmap/dataset \
 --export-dir workspace/gallery/group_name/project \
 --window-size 30 --overlap 10 \
@@ -38,11 +38,11 @@ Important hyperparameters:
 - `window-size`: number of frames in the sliding window. Around 30-40 frames per window are supported on NVIDIA RTX 4090 with 24 GB VRAM. 
 - `overlap`: increment between sliding windows
 
-See all parameters by running `python vdb_fusion/da3_colmap.py --help`
+See all parameters by running `python run_da3_inference.py --help`
 
 ### 4. Run TSDF fusion on depth maps
 ```powershell
-python vdb_fusion/fuse_da3_vdb.py \
+python run_tsdf_fusion.py \
 --input workspace/gallery/group_name/project \
 --output /path/to/output.ply \ 
 --confidence-threshold 6.0 \
@@ -54,13 +54,13 @@ Important hyperparameters:
 - `voxel-size`: voxel dimensions in the resulting mesh
 - `sdf-trunc`: TSDF truncation distance in depth units
 
-See all parameters by running `python vdb_fusion/fuse_da3_vdb.py --help`
+See all parameters by running `python run_tsdf_fusion.py --help`
 
 The script reads the camera intrinsics, extrinsics and image dimensions from the COLMAP dataset and transforms the intrinsics to 504x504 resolution (used by DA3). Then, it performs TSDF integration and mesh extraction.
 ### 5. (optional) Convert .ply mesh to .usdz or .usda file for Isaac Sim
 **Installation**: In order to run this script, the *usd-core* Python library has to be installed in the environment. Alternatively, you can run the script with the NVIDIA Isaac Sim interpreter (usually under /home/username/isaacsim/python.sh)
 ```powershell
-python vdb_fusion/ply_to_usd.py /path/to/mesh.ply \
+python ply_to_usd.py /path/to/mesh.ply \
 --gaussian-usdz /path/to/3dgrut_nurec_export.usdz \
 -o output_mesh.usd \
 --scene-output output_scene.usda
