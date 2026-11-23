@@ -3,7 +3,6 @@
 # ffmpeg -framerate 30 -i trajectory_watertight_100000/rgb_%04d.png -c:v libx264 -pix_fmt yuv420p trajectory.mp4
 
 import argparse
-import sys
 
 import numpy as np
 

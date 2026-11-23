@@ -1,4 +1,18 @@
 # Digital twin reconstruction with Project Aria Glasses
+## Export an Aria recording to COLMAP
+```powershell
+python make_colmap_data.py inputs/first_floor/first_floor.vrs \
+--output-dir outputs/first_floor
+```
+Undistorts the camera images to a pinhole model and writes a COLMAP text model (`sparse_prior/cameras.txt`, `images.txt`, `points3D.txt`) with poses from the MPS closed-loop trajectory and the MPS semidense point cloud. The MPS files are looked up in `<vrs dir>/mps_<vrs name>_vrs/slam` (override with `--mps-dir`, `--trajectory`, `--points`).
+
+By default, only the RGB camera is exported at full frame rate. Important parameters:
+- `cameras`: any of `rgb slam-left slam-right`. With more than one camera, images go into per-camera subfolders.
+- `downsample-rate`: keep every N-th frame
+- `grayscale`: convert RGB images to grayscale
+
+See all parameters by running `python make_colmap_data.py --help`
+
 ## TSDF fusion with DA3 + VDBFusion
 ### 1. Install [Depth Anything v3](https://github.com/ByteDance-Seed/Depth-Anything-3.git) and [VDBFusion](https://github.com/PRBonn/vdbfusion.git).
 Use the official installation guidelines. Please use separate environments because VDBFusion only supports Numpy==1.26.0

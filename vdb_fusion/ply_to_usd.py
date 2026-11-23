@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import struct
-import sys
 import tempfile
 from pathlib import Path
 
@@ -200,7 +199,7 @@ def load_ply_mesh(path: Path):
 
 def write_usd(vertices, faces, normals, colors, output: Path, scale: float, up_axis: str, meters_per_unit: float):
     try:
-        from pxr import Gf, Sdf, Usd, UsdGeom, UsdUtils, Vt
+        from pxr import Gf, Usd, UsdGeom, UsdUtils, Vt
     except ImportError as exc:
         raise SystemExit(
             "The Pixar USD Python bindings (pxr) are required. Run with Isaac Sim's "

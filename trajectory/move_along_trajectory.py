@@ -8,8 +8,6 @@
 #       --save-persistent
 
 import argparse
-import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -119,7 +117,7 @@ def set_camera_pose(camera_prim, position, quaternion):
     orient_op.Set(Gf.Quatf(qw, Gf.Vec3f(qx, qy, qz)))
 
 def input_thread():
-    x = input("Press ENTER to continue")
+    input("Press ENTER to continue")
     recording_activated["value"] = True
 
 
