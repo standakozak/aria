@@ -1,0 +1,16 @@
+# TSDF fusion environment: run_tsdf_fusion.py
+# vdbfusion only provides wheels up to Python 3.10 and needs numpy 1.x
+# conda env create -f environment-vdbfusion.yml
+name: aria-vdbfusion
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - numpy==1.26.4
+      - vdbfusion
+      - open3d
+      - pillow
+      - matplotlib

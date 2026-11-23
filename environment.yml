@@ -1,0 +1,26 @@
+# Main environment: preprocess_data.py, run_colmap_sfm.py, run_da3_inference.py, ply_to_usd.py
+# conda env create -f environment.yml
+name: aria
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - colmap=4.2.1=cuda_129*
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.8.0
+      - torchvision==0.23.0
+      - xformers==0.0.32.post2
+      - depth-anything-3[app] @ git+https://github.com/ByteDance-Seed/Depth-Anything-3.git
+      - addict        # used by Depth Anything 3 but not declared as a dependency
+      - scikit-learn  # used by Depth Anything 3 but not declared as a dependency
+      - numpy<2
+      - projectaria-tools
+      - opencv-python
+      - piexif
+      - pillow
+      - matplotlib
+      - requests
+      - usd-core
