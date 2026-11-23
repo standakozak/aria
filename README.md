@@ -63,14 +63,29 @@ python train.py --config-name apps/colmap_3dgut_mcmc.yaml \
 path=../aria/outputs/first_floor \
 out_dir=runs experiment_name=first_floor_3dgut_mcmc_ppisp \
 post_processing.method=ppisp \
-export_usd.enabled=true export_usd.format=nurec
+export_usd.enabled=true export_usd.format=nurec \
+export_usd.apply_normalizing_transform=false
 ```
 Important parameters:
 - `path`: dataset with `images/` and `sparse/0/` (output directory of `preprocess_data.py` after `run_colmap_sfm.py`)
 - `post_processing.method=ppisp`: enable PPISP. It uses the exposure stored in the image EXIF data by `preprocess_data.py`. After training, `post_processing.n_distillation_steps` (default 5000) extra steps train the PPISP controller for novel views.
 - `dataset.downsample_factor`: train on downsampled images (e.g. `2`; the images are resized once into `images_2/`)
 - `n_iterations`: training iterations (default 30000)
-- `export_usd.enabled=true export_usd.format=nurec`: export a NuRec USDZ for Isaac Sim, which can be used as `--gaussian-usdz` in `ply_to_usd.py`. Without `export_usd.format=nurec`, a standard USD `ParticleField` is exported.
+- `export_usd.enabled=true export_usd.format=nurec`: export a NuRec USDZ (`export_last_nurec.usdz` in the run directory) for Isaac Sim, which can be used as `--gaussian-usdz` in `ply_to_usd.py`. Without `export_usd.format=nurec`, a standard USD `ParticleField` is exported.
+- `export_usd.apply_normalizing_transform=false`: keep the Gaussians in the COLMAP world frame. **Always set this for NuRec exports**, see below.
+
+### NuRec export and the normalizing transform
+By default (`export_usd.apply_normalizing_transform=true`), 3DGRUT moves the Gaussians into a frame normalized to the camera poses and stores the inverse transform on the Gaussian volume (`/World/gauss/gauss` in the USDZ). The NuRec exporter writes this 4x4 matrix in column-vector order (`threedgrut/export/usd/nurec/serializer.py`, `Gf.Matrix4d(*corrected_matrix.flatten())`), so the translation ends up in the last column instead of the last row. USD reads this as a projective transform: the scene is not placed correctly, and `ply_to_usd.py --gaussian-usdz` copies the same matrix onto the mesh, which distorts it. With `apply_normalizing_transform=false`, the transform is the identity and the Gaussians, the cameras and the TSDF mesh share the COLMAP/MPS world frame.
+
+The `--no-transform` flag of 3DGRUT's standalone exporter (`python -m threedgrut.export.scripts.export_usd`) has no effect for `--format nurec`: the NuRec exporter reads `export_usd.apply_normalizing_transform` from the config stored in the checkpoint instead. To re-export an existing checkpoint without the normalizing transform, use `export_3dgrut_nurec.py`. It takes the same arguments as 3DGRUT's exporter and sets this value to `false` after loading the checkpoint when `--no-transform` is given:
+```bash
+cd ../3dgrut
+python ../aria/export_3dgrut_nurec.py \
+-c runs/first_floor_3dgut_mcmc_ppisp/<run>/ckpt_last.pt \
+-o runs/first_floor_3dgut_mcmc_ppisp/<run>/export_nurec_world.usdz \
+--format nurec --no-transform
+```
+The standalone exporter also exports the test cameras (`camera_0_val`) in addition to the training cameras. The warnings `Could not open asset @ppisp_usd_spg_auto.usda@` during the export are harmless: the file is added to the USDZ afterwards.
 
 On the first run, 3DGRUT compiles its CUDA kernels (a few minutes), later runs use the cache in `~/.cache/torch_extensions`.
 
@@ -122,12 +137,12 @@ The script reads the camera intrinsics, extrinsics and image dimensions from the
 **Installation**: The *usd-core* Python library is included in the `aria` environment. Alternatively, you can run the script with the NVIDIA Isaac Sim interpreter (usually under /home/username/isaacsim/python.sh)
 ```powershell
 python ply_to_usd.py /path/to/mesh.ply \
---gaussian-usdz /path/to/3dgrut_nurec_export.usdz \
+--gaussian-usdz /path/to/3dgrut_run/export_nurec_world.usdz \
 -o output_mesh.usd \
 --scene-output output_scene.usda
 ```
 
 Important hyperparameters: 
-- `gaussian-usdz`: (optional) - output file of the gaussian splatting scene (usdz file). If used, the script will apply the same transformation to the mesh, so that they are aligned in the .usda scene
+- `gaussian-usdz`: (optional) - output file of the gaussian splatting scene (usdz file). If used, the script will apply the same transformation to the mesh, so that they are aligned in the .usda scene. Use a NuRec export without the normalizing transform (see [NuRec export and the normalizing transform](#nurec-export-and-the-normalizing-transform)), otherwise the mesh gets a projective transform.
 - `-o`: output file of the converted .ply file (.usdz file)
 - `scene-output` (optional, only when using `gaussian-usdz`) - combined .usda output scene with Gaussian .usdz and mesh .usdz with the same transformation
